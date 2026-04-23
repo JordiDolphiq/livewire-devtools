@@ -57,9 +57,7 @@ export function createV4Adapter(L: any): LivewireAdapter {
     },
 
     getComponentById(id) {
-      const raw =
-        (typeof L.find === 'function' ? L.find(id) : null) ||
-        getAll().find((c) => String(c.id) === id)
+      const raw = getAll().find((c) => String(c.id) === id)
       return raw ? normalize(raw) : null
     },
 

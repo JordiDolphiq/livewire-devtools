@@ -19,6 +19,13 @@ function announce() {
     alpine: alpineInfo()
   }
 
+  console.log('[livewire-devtools] detector: Livewire found', {
+    hasInterceptMessage: typeof L.interceptMessage === 'function',
+    hasHook: typeof L.hook === 'function',
+    hasAll: typeof L.all === 'function',
+    alpine: payload.alpine
+  })
+
   window.postMessage(
     { source: PAGE_SOURCE, message: { event: 'livewire:detected', payload } },
     '*'
@@ -30,8 +37,13 @@ function announce() {
   return true
 }
 
+console.log('[livewire-devtools] detector injected')
+
 ;(function poll(attempt = 0) {
   if (announce()) return
-  if (attempt >= MAX_ATTEMPTS) return
+  if (attempt >= MAX_ATTEMPTS) {
+    console.warn('[livewire-devtools] detector: window.Livewire never appeared')
+    return
+  }
   setTimeout(() => poll(attempt + 1), INTERVAL_MS)
 })()

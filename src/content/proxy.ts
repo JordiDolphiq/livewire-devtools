@@ -2,26 +2,30 @@ import detectorUrl from '@/injected/detector.ts?script&module'
 import backendUrl from '@/injected/backend.ts?script&module'
 import { PAGE_SOURCE, CONTENT_SOURCE } from '@/shared/constants'
 
+console.log('[livewire-devtools] content proxy ready')
+
 let backendInjected = false
 
-function injectPageScript(url: string) {
+function injectPageScript(url: string, tag: string) {
   const script = document.createElement('script')
   script.src = chrome.runtime.getURL(url)
   script.type = 'module'
+  script.dataset.livewireDevtools = tag
   script.onload = () => script.remove()
+  script.onerror = (e) =>
+    console.error(`[livewire-devtools] ${tag} inject failed`, e, script.src)
   ;(document.head || document.documentElement).appendChild(script)
 }
 
 function injectBackendOnce() {
   if (backendInjected) return
   backendInjected = true
-  injectPageScript(backendUrl)
+  console.log('[livewire-devtools] injecting backend')
+  injectPageScript(backendUrl, 'backend')
 }
 
-// Inject detector in the page world so it can see window.Livewire.
-injectPageScript(detectorUrl)
+injectPageScript(detectorUrl, 'detector')
 
-// page -> service worker (forward anything the page emits)
 window.addEventListener('message', (event) => {
   if (event.source !== window) return
   const data = event.data
@@ -29,11 +33,10 @@ window.addEventListener('message', (event) => {
   try {
     chrome.runtime.sendMessage(data.message)
   } catch {
-    // service worker asleep; let the panel retry
+    /* service worker asleep */
   }
 })
 
-// service worker -> page (forward anything the panel sends)
 chrome.runtime.onMessage.addListener((message) => {
   if (!message || typeof message !== 'object') return
   if ((message as { event?: string }).event === 'init') {

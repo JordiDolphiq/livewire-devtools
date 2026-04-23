@@ -85,6 +85,12 @@ export function createV3Adapter(L: any): LivewireAdapter {
       L.hook('component.init', ({ component }: any) => {
         if (component) cb(normalize(component))
       })
+      L.hook('morph.added', ({ el }: any) => {
+        const id = el?.getAttribute?.('wire:id')
+        if (!id) return
+        const c = adapter.getComponentById(id)
+        if (c) cb(c)
+      })
       return () => {}
     },
 

@@ -1,6 +1,7 @@
 import { createAdapter, detectAlpine } from '@/adapter'
 import type { LivewireAdapter, NormalizedComponent } from '@/adapter/types'
 import { Bridge, type BridgeWall } from '@/shared/bridge'
+import { toCloneable } from '@/shared/cloneable'
 import { PAGE_SOURCE, CONTENT_SOURCE } from '@/shared/constants'
 import { highlight, unhighlight } from './backend/highlighter'
 import { initContextMenuCapture, consumeContextTarget } from './backend/selector'
@@ -24,7 +25,14 @@ function createWall(): BridgeWall {
       })
     },
     send(msg) {
-      window.postMessage({ source: PAGE_SOURCE, message: msg }, '*')
+      try {
+        window.postMessage(
+          { source: PAGE_SOURCE, message: toCloneable(msg) },
+          '*'
+        )
+      } catch (err) {
+        console.warn('[livewire-devtools] postMessage dropped', err)
+      }
     }
   }
 }
@@ -32,6 +40,7 @@ function createWall(): BridgeWall {
 function start() {
   if (window.__LIVEWIRE_DEVTOOLS_BACKEND_LOADED__) return
   window.__LIVEWIRE_DEVTOOLS_BACKEND_LOADED__ = true
+  console.log('[livewire-devtools] backend starting')
 
   let adapter: LivewireAdapter | null = null
   let currentInspectedId: string | null = null
@@ -86,6 +95,13 @@ function start() {
   })
 
   initContextMenuCapture()
+
+  document.addEventListener('livewire:navigated', () => {
+    console.log('[livewire-devtools] wire:navigated — rescanning')
+    adapter = null
+    attempts = 0
+    waitForLivewire()
+  })
 
   bridge.on('init', () => {
     // Panel may request a fresh ready event (e.g. after reconnect).
@@ -180,8 +196,14 @@ function start() {
   let attempts = 0
   const maxAttempts = 80
   function waitForLivewire() {
-    if (announceAndFlush()) return
-    if (attempts++ >= maxAttempts) return
+    if (announceAndFlush()) {
+      console.log('[livewire-devtools] backend ready')
+      return
+    }
+    if (attempts++ >= maxAttempts) {
+      console.warn('[livewire-devtools] gave up waiting for window.Livewire')
+      return
+    }
     setTimeout(waitForLivewire, 100)
   }
 

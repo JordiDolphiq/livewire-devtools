@@ -1,5 +1,7 @@
 type Listener = (...args: unknown[]) => void
 
+console.log('[livewire-devtools] hook injected')
+
 if (!window.__LIVEWIRE_DEVTOOLS_GLOBAL_HOOK__) {
   const events: Record<string, Listener[]> = {}
 

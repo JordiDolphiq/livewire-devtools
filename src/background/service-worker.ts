@@ -14,7 +14,7 @@ function ensureContextMenu() {
       })
     })
   } catch {
-    /* contextMenus may not be available in MV3 SW during startup */
+    /* noop */
   }
 }
 

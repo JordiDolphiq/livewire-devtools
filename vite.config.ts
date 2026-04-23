@@ -13,7 +13,7 @@ export default defineConfig({
   },
   build: {
     target: 'chrome111',
-    sourcemap: true,
+    sourcemap: 'hidden',
     emptyOutDir: true,
     rollupOptions: {
       input: {

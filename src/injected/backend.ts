@@ -37,13 +37,21 @@ function createWall(): BridgeWall {
   }
 }
 
+const BACKEND_VERSION = '2.0.9'
+
 function start() {
   if (window.__LIVEWIRE_DEVTOOLS_BACKEND_LOADED__) return
   window.__LIVEWIRE_DEVTOOLS_BACKEND_LOADED__ = true
-  console.log('[livewire-devtools] backend starting')
+  console.log(`[livewire-devtools] backend v${BACKEND_VERSION} starting`)
 
   let adapter: LivewireAdapter | null = null
   let currentInspectedId: string | null = null
+  // Last-known name for the currently inspected component — lets us re-find
+  // the component after a morph/wire:navigate mints a fresh ID.
+  let currentInspectedName: string | null = null
+  // Last successfully-built details so we can keep showing state when a flush
+  // happens while the tree is in transition.
+  let lastInspectedDetails: ComponentDetails | null = null
   let filter = ''
 
   const bridge = new Bridge<PanelToBackend, BackendToPanel>(createWall())
@@ -59,6 +67,10 @@ function start() {
 
   bridge.on('select-instance', (id) => {
     currentInspectedId = id
+    const a = ensureAdapter()
+    const c = a ? a.getComponentById(id) : null
+    currentInspectedName = c?.name ?? null
+    lastInspectedDetails = null
     bridge.send('instance-selected')
     flush()
   })
@@ -105,6 +117,9 @@ function start() {
     console.log('[livewire-devtools] wire:navigated — rescanning')
     adapter = null
     attempts = 0
+    // Keep the inspected name so we can re-attach to the same component on
+    // the new page if it's still there.
+    lastInspectedDetails = null
     waitForLivewire()
   })
 
@@ -172,9 +187,37 @@ function start() {
 
   function inspectedDetails(a: LivewireAdapter): ComponentDetails | null {
     if (!currentInspectedId) return null
-    const c = a.getComponentById(currentInspectedId)
-    if (!c) return null
-    return { id: c.id, name: c.name, state: a.getComponentState(c) }
+
+    // 1. Direct id lookup.
+    let c = a.getComponentById(currentInspectedId)
+
+    // 2. Stale id? Try to re-attach by name (survives morphs and wire:navigate
+    //    when a single component of that name exists on the new page).
+    if (!c && currentInspectedName) {
+      const sameName = a
+        .getAllComponents()
+        .filter((x) => x.name === currentInspectedName)
+      if (sameName.length === 1) {
+        c = sameName[0] ?? null
+        if (c) {
+          currentInspectedId = c.id
+        }
+      }
+    }
+
+    if (!c) {
+      // Keep the panel showing the last known state while the tree is in
+      // transition — prevents the state pane from flickering empty during
+      // morphs/navigations. Only clears when the user selects something else
+      // or we get a new successful snapshot.
+      return lastInspectedDetails
+    }
+
+    const state = a.getComponentState(c)
+    currentInspectedName = c.name
+    const details: ComponentDetails = { id: c.id, name: c.name, state }
+    lastInspectedDetails = details
+    return details
   }
 
   function flush() {

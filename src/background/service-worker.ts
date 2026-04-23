@@ -18,6 +18,24 @@ function ensureContextMenu() {
   }
 }
 
+function validTabId(id: number | undefined | null): id is number {
+  return typeof id === 'number' && Number.isFinite(id) && id >= 0
+}
+
+function safeSendMessage(tabId: number, msg: unknown): void {
+  if (!validTabId(tabId)) return
+  try {
+    const result = chrome.tabs.sendMessage(tabId, msg)
+    // MV3 returns a Promise. Swallow rejections — the target may not have
+    // a content script (chrome://, about:, extension pages, etc.).
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      ;(result as Promise<unknown>).catch(() => {})
+    }
+  } catch {
+    /* synchronous throws (bad tabId, scheme check) */
+  }
+}
+
 chrome.runtime.onInstalled.addListener(ensureContextMenu)
 chrome.runtime.onStartup.addListener(ensureContextMenu)
 ensureContextMenu()
@@ -25,24 +43,26 @@ ensureContextMenu()
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== CONTEXT_MENU_ID) return
   const tabId = tab?.id
-  if (typeof tabId !== 'number') return
-  chrome.tabs.sendMessage(tabId, { event: 'get-context-menu-target' }).catch(() => {})
+  if (!validTabId(tabId)) return
+  safeSendMessage(tabId, { event: 'get-context-menu-target' })
 })
 
 chrome.runtime.onConnect.addListener((port) => {
   const tabId = Number(port.name)
-  if (!Number.isFinite(tabId)) return
+  if (!validTabId(tabId)) {
+    try {
+      port.disconnect()
+    } catch {
+      /* noop */
+    }
+    return
+  }
 
   ports.set(tabId, port)
 
   port.onMessage.addListener((message) => {
-    chrome.tabs.sendMessage(tabId, message).catch(() => {
-      try {
-        port.postMessage({ event: 'proxy-fail' })
-      } catch {
-        /* port closed */
-      }
-    })
+    if (!validTabId(tabId)) return
+    safeSendMessage(tabId, message)
   })
 
   port.onDisconnect.addListener(() => {
@@ -52,7 +72,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab?.id
-  if (typeof tabId !== 'number') return
+  if (!validTabId(tabId)) return
 
   if (message?.event === 'livewire:detected') {
     setIcon(tabId, message.payload?.devToolsEnabled !== false)
@@ -73,14 +93,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return
-  // Skip restricted pages (chrome://, file://, extension pages, etc.) where
-  // setIcon/setPopup rejects with "Failed to fetch". Only touch normal web tabs.
+  if (!validTabId(tabId)) return
   const url = tab?.url ?? ''
   if (!/^https?:/i.test(url)) return
   resetIcon(tabId)
 })
 
 function setIcon(tabId: number, enabled: boolean) {
+  if (!validTabId(tabId)) return
   const suffix = enabled ? '' : '-gray'
   chrome.action
     .setIcon({
@@ -91,9 +111,7 @@ function setIcon(tabId: number, enabled: boolean) {
         128: `icons/128${suffix}.png`
       }
     })
-    .catch(() => {
-      /* tab may have closed; ignore */
-    })
+    .catch(() => {})
   chrome.action
     .setPopup({
       tabId,
@@ -103,6 +121,7 @@ function setIcon(tabId: number, enabled: boolean) {
 }
 
 function resetIcon(tabId: number) {
+  if (!validTabId(tabId)) return
   chrome.action
     .setIcon({
       tabId,

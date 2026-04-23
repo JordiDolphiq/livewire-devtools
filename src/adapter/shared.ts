@@ -65,30 +65,80 @@ function looksLikeId(s: string): boolean {
 }
 
 export function readState(component: any): Record<string, unknown> {
-  // 1. Livewire 4: `component.ephemeral` is the live client-side state, already
-  //    unwrapped from the snapshot's [value, meta] pairs. This is the freshest
-  //    and cleanest source.
-  if (component?.ephemeral && typeof component.ephemeral === 'object') {
-    return cloneShallow(component.ephemeral)
+  // Try each source in priority order. Skip a source if it's present but empty
+  // — some components briefly expose an empty `ephemeral` during early mount
+  // while `snapshot.data` already has the real state.
+  const sources: Array<{ label: string; get: () => Record<string, unknown> | null }> = [
+    {
+      label: 'ephemeral',
+      get: () => {
+        const v = component?.ephemeral
+        return v && typeof v === 'object' ? cloneShallow(v) : null
+      }
+    },
+    {
+      label: 'canonical',
+      get: () => {
+        const v = component?.canonical
+        return v && typeof v === 'object' ? cloneShallow(v) : null
+      }
+    },
+    {
+      label: 'data',
+      get: () => {
+        const v = component?.data
+        return v && typeof v === 'object' ? unwrapData(v) : null
+      }
+    },
+    {
+      label: 'snapshot.data',
+      get: () => {
+        const v = component?.snapshot?.data
+        return v && typeof v === 'object' ? unwrapData(v) : null
+      }
+    }
+  ]
+
+  let lastEmpty: Record<string, unknown> | null = null
+  for (const src of sources) {
+    const candidate = src.get()
+    if (!candidate) continue
+    if (Object.keys(candidate).length > 0) {
+      logStateSource(component, src.label, candidate)
+      return candidate
+    }
+    lastEmpty = candidate
   }
 
-  // 2. Livewire 4 fallback: canonical state (last server-confirmed).
-  if (component?.canonical && typeof component.canonical === 'object') {
-    return cloneShallow(component.canonical)
-  }
+  logStateSource(component, 'none', lastEmpty ?? {})
+  return lastEmpty ?? {}
+}
 
-  // 3. Livewire 3: `component.data` is a flat key/value bag.
-  if (component?.data && typeof component.data === 'object') {
-    return unwrapData(component.data)
+function logStateSource(
+  component: any,
+  source: string,
+  result: Record<string, unknown>
+) {
+  // Only log when state ends up empty or when verbose mode is on — anything
+  // else is noise.
+  const verbose = (globalThis as any).__LIVEWIRE_DEVTOOLS_VERBOSE__
+  const empty = Object.keys(result).length === 0
+  if (!empty && !verbose) return
+  try {
+    console.debug(
+      `[livewire-devtools] readState ${component?.name ?? component?.id} → ${source} (${Object.keys(result).length} keys)`,
+      empty
+        ? {
+            hasEphemeral: !!component?.ephemeral,
+            hasCanonical: !!component?.canonical,
+            hasData: !!component?.data,
+            hasSnapshotData: !!component?.snapshot?.data
+          }
+        : undefined
+    )
+  } catch {
+    /* noop */
   }
-
-  // 4. Last resort: parse the raw snapshot.data.
-  const snapshotData = component?.snapshot?.data
-  if (snapshotData && typeof snapshotData === 'object') {
-    return unwrapData(snapshotData)
-  }
-
-  return {}
 }
 
 function cloneShallow(src: Record<string, unknown>): Record<string, unknown> {
@@ -160,6 +210,7 @@ export function wrapDispatch(
   const original = Livewire.dispatch as (name: string, ...args: unknown[]) => unknown
   const listeners: Array<(name: string, args: unknown[]) => void> = [cb]
   const wrapped = (name: string, ...args: unknown[]) => {
+    markGlobalDispatch(name)
     for (const fn of listeners.slice()) {
       try {
         fn(name, args)
@@ -180,6 +231,148 @@ export function wrapDispatch(
       Livewire.dispatch = original
     }
   }
+}
+
+// Browser-intrinsic event types we never want to surface in the events tab.
+// Alpine's `$dispatch(name, detail)` fires a CustomEvent; most interesting
+// devtools events look like `post-created`, `close-modal`, `livewire:navigated`.
+const INTRINSIC_EVENT_PREFIXES = [
+  'pointer',
+  'mouse',
+  'key',
+  'touch',
+  'drag',
+  'focus',
+  'blur',
+  'input',
+  'change',
+  'animation',
+  'transition',
+  'scroll',
+  'resize',
+  'compositionstart',
+  'compositionend',
+  'compositionupdate'
+]
+const INTRINSIC_EVENT_TYPES = new Set([
+  'load',
+  'unload',
+  'beforeunload',
+  'error',
+  'abort',
+  'select',
+  'submit',
+  'reset',
+  'contextmenu',
+  'DOMContentLoaded',
+  'readystatechange',
+  'visibilitychange',
+  'online',
+  'offline',
+  'hashchange',
+  'popstate',
+  'storage',
+  'message',
+  'messageerror',
+  'copy',
+  'cut',
+  'paste',
+  'play',
+  'pause',
+  'ended',
+  'timeupdate',
+  'seeking',
+  'seeked',
+  'volumechange',
+  'wheel',
+  'click',
+  'dblclick',
+  'auxclick'
+])
+
+interface WrappedDispatchMarker {
+  __livewireDevtoolsDomHooked?: boolean
+  __livewireDevtoolsOriginalDispatchEvent?: typeof EventTarget.prototype.dispatchEvent
+  __livewireDevtoolsDomListeners?: Set<
+    (name: string, args: unknown[], source: string | null) => void
+  >
+  __livewireDevtoolsRecentGlobal?: Map<string, number>
+}
+
+const globalAny = globalThis as unknown as WrappedDispatchMarker
+
+/**
+ * Patch EventTarget.prototype.dispatchEvent to surface Alpine `$dispatch`
+ * and page-level `CustomEvent`s. Livewire's own `Livewire.dispatch` internally
+ * delegates to `window.dispatchEvent(new CustomEvent(...))`, so we dedupe
+ * against the last bridge dispatch within a 50ms window to avoid double-log.
+ */
+export function installDomEventCapture(
+  cb: (name: string, args: unknown[], sourceComponentId: string | null) => void
+): () => void {
+  if (typeof EventTarget === 'undefined') return () => {}
+
+  if (!globalAny.__livewireDevtoolsDomHooked) {
+    globalAny.__livewireDevtoolsDomHooked = true
+    globalAny.__livewireDevtoolsDomListeners = new Set()
+    globalAny.__livewireDevtoolsRecentGlobal = new Map()
+    const original = EventTarget.prototype.dispatchEvent
+    globalAny.__livewireDevtoolsOriginalDispatchEvent = original
+    EventTarget.prototype.dispatchEvent = function (event: Event) {
+      try {
+        if (event instanceof CustomEvent) {
+          const type = event.type
+          if (!INTRINSIC_EVENT_TYPES.has(type) && !isIntrinsicPrefix(type)) {
+            const listeners = globalAny.__livewireDevtoolsDomListeners
+            if (listeners && listeners.size > 0) {
+              // Dedupe: if Livewire.dispatch fired this same name <50ms ago,
+              // assume wrapDispatch already surfaced it — skip.
+              const recent = globalAny.__livewireDevtoolsRecentGlobal!.get(type) ?? 0
+              if (Date.now() - recent > 50) {
+                const detail = event.detail
+                const payload = detail === undefined ? [] : [detail]
+                for (const fn of listeners) {
+                  try {
+                    fn(type, payload, null)
+                  } catch (err) {
+                    console.error('[livewire-devtools] dom capture cb error', err)
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        /* never let our capture break the host page */
+      }
+      return original.call(this, event)
+    }
+  }
+
+  globalAny.__livewireDevtoolsDomListeners!.add(cb)
+  return () => {
+    globalAny.__livewireDevtoolsDomListeners?.delete(cb)
+  }
+}
+
+/** Mark a global dispatch name as just-seen so the DOM capture can dedupe. */
+export function markGlobalDispatch(name: string) {
+  if (!globalAny.__livewireDevtoolsRecentGlobal) return
+  globalAny.__livewireDevtoolsRecentGlobal.set(name, Date.now())
+  // prune occasionally
+  if (globalAny.__livewireDevtoolsRecentGlobal.size > 256) {
+    const cutoff = Date.now() - 1000
+    for (const [k, t] of globalAny.__livewireDevtoolsRecentGlobal) {
+      if (t < cutoff) globalAny.__livewireDevtoolsRecentGlobal.delete(k)
+    }
+  }
+}
+
+function isIntrinsicPrefix(type: string): boolean {
+  for (const p of INTRINSIC_EVENT_PREFIXES) {
+    if (type.startsWith(p)) return true
+  }
+  return false
 }
 
 export function findComponentForElement(Livewire: any, el: Element): any | null {

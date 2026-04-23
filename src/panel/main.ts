@@ -11,9 +11,10 @@ import { useUi } from './stores/ui'
 const tabIdParam = new URLSearchParams(location.search).get('tabId')
 const tabId = Number(tabIdParam)
 
-if (!Number.isFinite(tabId)) {
-  document.body.innerText = 'Livewire DevTools: missing tabId.'
-  throw new Error('Missing tabId query parameter')
+if (!Number.isFinite(tabId) || tabId < 0) {
+  document.body.innerText =
+    'Livewire DevTools: this tab cannot be inspected (chrome:// or extension page).'
+  throw new Error(`Invalid tabId: ${tabIdParam}`)
 }
 
 const bridge = createPanelBridge(tabId)
@@ -43,6 +44,15 @@ bridge.on('ready', (payload) => {
 })
 
 bridge.on('flush', (payload) => {
+  const stateKeys = payload?.inspected ? Object.keys(payload.inspected.state ?? {}).length : null
+  console.debug(
+    '[livewire-devtools:panel] flush received',
+    {
+      treeSize: payload?.tree?.length ?? 0,
+      inspectedId: payload?.inspected?.id ?? null,
+      inspectedStateKeys: stateKeys
+    }
+  )
   components.setFlush(payload)
 })
 

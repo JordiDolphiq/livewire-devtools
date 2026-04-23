@@ -50,7 +50,12 @@ function start() {
   const instanceMap = new Map<string, NormalizedComponent>()
   window.__LIVEWIRE_DEVTOOLS_INSTANCE_MAP__ = instanceMap as Map<string, unknown>
 
-  bridge.on('refresh', () => flush())
+  bridge.on('refresh', () => {
+    console.log('[livewire-devtools] refresh')
+    adapter = null
+    attempts = 0
+    waitForLivewire()
+  })
 
   bridge.on('select-instance', (id) => {
     currentInspectedId = id

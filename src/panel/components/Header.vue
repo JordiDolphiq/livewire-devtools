@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { useConnection } from '../stores/connection'
 import { useUi, type Tab } from '../stores/ui'
 import type { PanelBridge } from '../bridge'
@@ -7,6 +7,8 @@ import type { PanelBridge } from '../bridge'
 const connection = useConnection()
 const ui = useUi()
 const bridge = inject<PanelBridge>('bridge')!
+
+const refreshing = ref(false)
 
 const alpineBadge = computed(() => {
   if (!connection.alpine.present) return null
@@ -24,8 +26,15 @@ function setTab(id: Tab) {
 }
 
 function refresh() {
+  if (refreshing.value) return
+  refreshing.value = true
   bridge.send('refresh')
+  setTimeout(() => {
+    refreshing.value = false
+  }, 500)
 }
+
+defineExpose({ refresh })
 </script>
 
 <template>
@@ -48,7 +57,15 @@ function refresh() {
     </nav>
 
     <span class="spacer" />
-    <button class="btn" title="Refresh" @click="refresh">Refresh</button>
+    <button
+      class="btn"
+      :class="{ refreshing }"
+      :disabled="refreshing"
+      title="Refresh"
+      @click="refresh"
+    >
+      {{ refreshing ? 'Refreshing…' : 'Refresh' }}
+    </button>
   </header>
 </template>
 
@@ -110,7 +127,11 @@ function refresh() {
   cursor: pointer;
   font-size: 12px;
 }
-.btn:hover {
+.btn:hover:not(:disabled) {
   border-color: var(--accent-color);
+}
+.btn.refreshing {
+  opacity: 0.6;
+  cursor: progress;
 }
 </style>

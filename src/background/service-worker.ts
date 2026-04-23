@@ -71,35 +71,49 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   ports.delete(tabId)
 })
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return
+  // Skip restricted pages (chrome://, file://, extension pages, etc.) where
+  // setIcon/setPopup rejects with "Failed to fetch". Only touch normal web tabs.
+  const url = tab?.url ?? ''
+  if (!/^https?:/i.test(url)) return
   resetIcon(tabId)
 })
 
 function setIcon(tabId: number, enabled: boolean) {
   const suffix = enabled ? '' : '-gray'
-  chrome.action.setIcon({
-    tabId,
-    path: {
-      16: `icons/16${suffix}.png`,
-      48: `icons/48${suffix}.png`,
-      128: `icons/128${suffix}.png`
-    }
-  })
-  chrome.action.setPopup({
-    tabId,
-    popup: enabled ? 'src/popup/enabled.html' : 'src/popup/disabled.html'
-  })
+  chrome.action
+    .setIcon({
+      tabId,
+      path: {
+        16: `icons/16${suffix}.png`,
+        48: `icons/48${suffix}.png`,
+        128: `icons/128${suffix}.png`
+      }
+    })
+    .catch(() => {
+      /* tab may have closed; ignore */
+    })
+  chrome.action
+    .setPopup({
+      tabId,
+      popup: enabled ? 'src/popup/enabled.html' : 'src/popup/disabled.html'
+    })
+    .catch(() => {})
 }
 
 function resetIcon(tabId: number) {
-  chrome.action.setIcon({
-    tabId,
-    path: {
-      16: 'icons/16-gray.png',
-      48: 'icons/48-gray.png',
-      128: 'icons/128-gray.png'
-    }
-  })
-  chrome.action.setPopup({ tabId, popup: 'src/popup/not-found.html' })
+  chrome.action
+    .setIcon({
+      tabId,
+      path: {
+        16: 'icons/16-gray.png',
+        48: 'icons/48-gray.png',
+        128: 'icons/128-gray.png'
+      }
+    })
+    .catch(() => {})
+  chrome.action
+    .setPopup({ tabId, popup: 'src/popup/not-found.html' })
+    .catch(() => {})
 }

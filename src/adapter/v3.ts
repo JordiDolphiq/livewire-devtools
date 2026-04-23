@@ -4,7 +4,7 @@ import type {
   LivewireAdapter,
   NormalizedComponent
 } from './types'
-import { findComponentForElement, normalize, wrapDispatch } from './shared'
+import { findComponentForElement, installDomEventCapture, normalize, wrapDispatch } from './shared'
 import { isDevToolsEnabled } from './detect'
 
 export function createV3Adapter(L: any): LivewireAdapter {
@@ -133,10 +133,12 @@ export function createV3Adapter(L: any): LivewireAdapter {
         emitDispatch(name, payload, null)
       })
       for (const c of getAll()) wrapComponentDispatch(c)
+      const stopDom = installDomEventCapture(emitDispatch)
       return () => {
         const i = eventListeners.indexOf(cb)
         if (i >= 0) eventListeners.splice(i, 1)
         stopGlobal()
+        stopDom()
       }
     },
 

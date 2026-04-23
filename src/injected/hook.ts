@@ -27,13 +27,15 @@ if (!window.__LIVEWIRE_DEVTOOLS_GLOBAL_HOOK__) {
       }
     },
     emit(event: string, ...args: unknown[]) {
-      events[event]?.slice().forEach((fn) => {
+      const list = events[event]
+      if (!list) return
+      for (const fn of list.slice()) {
         try {
           fn(...args)
         } catch (e) {
-          console.error(e)
+          console.error('[livewire-devtools] hook listener error', e)
         }
-      })
+      }
     }
   }
 
